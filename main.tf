@@ -1,51 +1,62 @@
+# ──────────────────────────────────────────────
+# Data Sources
+# ──────────────────────────────────────────────
+
 data "oci_identity_availability_domains" "ads" {
-  compartment_id = var.compartment_ocid 
+  compartment_id = var.compartment_ocid
 }
 
+data "oci_core_images" "oracle_linux" {
+  compartment_id   = var.compartment_ocid
+  operating_system = "Oracle Linux"
+  shape            = var.instance_shape
 
+  sort_by    = "TIMECREATED"
+  sort_order = "DESC"
+}
+
+# ──────────────────────────────────────────────
+# Locals
+# ──────────────────────────────────────────────
+
+locals {
+
+  selected_image_id = var.instance_image_ocid != "" ? var.instance_image_ocid : try(data.oci_core_images.oracle_linux.images[0].id, "")
+}
+
+# ──────────────────────────────────────────────
+# Networking
+# ──────────────────────────────────────────────
 
 resource "oci_core_vcn" "this" {
   compartment_id = var.compartment_ocid
-  cidr_blocks    = ["10.0.0.0/16"]
-  display_name   = "free-tier-vcn"
+  cidr_blocks    = [var.vcn_cidr]
+  display_name   = var.vcn_display_name
   dns_label      = "freetiervcn"
 }
 
 resource "oci_core_subnet" "this" {
   compartment_id             = var.compartment_ocid
   vcn_id                     = oci_core_vcn.this.id
-  cidr_block                 = "10.0.1.0/24"
-  display_name               = "free-tier-subnet"
+  cidr_block                 = var.subnet_cidr
+  display_name               = var.subnet_display_name
   dns_label                  = "freetiersub"
   prohibit_public_ip_on_vnic = false
 }
 
-
-
-data "oci_core_images" "alma_linux" {
-  compartment_id   = var.compartment_ocid 
-  operating_system = "Oracle Linux"
-  shape            = "VM.Standard.A1.Flex"
-
-  sort_by    = "TIMECREATED"
-  sort_order = "DESC"
-}
-
-locals {
-  selected_image_id = var.instance_image_ocid != "" ? var.instance_image_ocid : try(data.oci_core_images.alma_linux.images[0].id, "")
-}
+# ──────────────────────────────────────────────
+# Compute Instance
+# ──────────────────────────────────────────────
 
 resource "oci_core_instance" "this" {
   compartment_id      = var.compartment_ocid
   availability_domain = data.oci_identity_availability_domains.ads.availability_domains[0].name
-
-
-  shape        = "VM.Standard.A1.Flex"
-  display_name = var.instance_display_name
+  shape               = var.instance_shape
+  display_name        = var.instance_display_name
 
   shape_config {
-    ocpus         = 1
-    memory_in_gbs = 6
+    ocpus         = var.instance_ocpus
+    memory_in_gbs = var.instance_memory_in_gbs
   }
 
   source_details {
