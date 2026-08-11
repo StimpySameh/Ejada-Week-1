@@ -1,0 +1,174 @@
+#cloud-config
+# ──────────────────────────────────────────────
+# Cloud-Init: Bootstrap App Server
+# ──────────────────────────────────────────────
+# This runs on first boot to:
+#   1. Install NFS utilities and Python 3
+#   2. Mount OCI File Storage
+#   3. Deploy a Python web application on the FSS mount
+#   4. Create a systemd service for the app
+
+package_update: true
+package_upgrade: false
+
+packages:
+  - nfs-utils
+  - python3
+
+runcmd:
+  # ── Mount the OCI File Storage ──
+  - mkdir -p ${mount_point}
+  - mount -t nfs -o nfsvers=3 ${mount_target_ip}:${export_path} ${mount_point}
+  - echo '${mount_target_ip}:${export_path} ${mount_point} nfs nfsvers=3,defaults 0 0' >> /etc/fstab
+
+  # ── Deploy the application files to FSS ──
+  - mkdir -p ${mount_point}/www
+
+  # Create a simple Python HTTP server application
+  - |
+    cat > ${mount_point}/www/app.py << 'APPEOF'
+    #!/usr/bin/env python3
+    """
+    Simple web application served from OCI File Storage.
+    Serves HTML content and a health-check endpoint.
+    """
+    import http.server
+    import json
+    import os
+    import socket
+    from datetime import datetime, timezone
+
+    PORT = ${app_port}
+    PROJECT = "${project_name}"
+    MOUNT_POINT = "${mount_point}"
+
+    class AppHandler(http.server.BaseHTTPRequestHandler):
+        """Custom HTTP handler with health check and app pages."""
+
+        def do_GET(self):
+            if self.path == "/health":
+                self._send_json(200, {
+                    "status": "healthy",
+                    "project": PROJECT,
+                    "hostname": socket.gethostname(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                })
+            elif self.path == "/api/info":
+                # Show FSS mount info
+                fss_files = []
+                try:
+                    fss_files = os.listdir(os.path.join(MOUNT_POINT, "www"))
+                except OSError:
+                    fss_files = ["(unable to list)"]
+                self._send_json(200, {
+                    "project": PROJECT,
+                    "mount_point": MOUNT_POINT,
+                    "fss_files": fss_files,
+                    "hostname": socket.gethostname(),
+                })
+            else:
+                self._send_html(200, self._render_page())
+
+        def _send_json(self, code, data):
+            body = json.dumps(data, indent=2).encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _send_html(self, code, html):
+            body = html.encode()
+            self.send_response(code)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+
+        def _render_page(self):
+            return f"""<!DOCTYPE html>
+    <html lang="en">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>{PROJECT} – App Server</title>
+        <style>
+            * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+            body {{
+                font-family: 'Segoe UI', system-ui, sans-serif;
+                background: linear-gradient(135deg, #0f0c29, #302b63, #24243e);
+                color: #e0e0e0; min-height: 100vh;
+                display: flex; align-items: center; justify-content: center;
+            }}
+            .card {{
+                background: rgba(255,255,255,0.06);
+                backdrop-filter: blur(12px);
+                border: 1px solid rgba(255,255,255,0.12);
+                border-radius: 16px; padding: 3rem;
+                max-width: 540px; width: 90%;
+                box-shadow: 0 8px 32px rgba(0,0,0,0.4);
+            }}
+            h1 {{ color: #7c83ff; margin-bottom: 1rem; font-size: 1.8rem; }}
+            .badge {{
+                display: inline-block; padding: 4px 12px;
+                background: rgba(76,175,80,0.2); color: #66bb6a;
+                border-radius: 20px; font-size: 0.85rem; margin-bottom: 1.5rem;
+            }}
+            .info {{ line-height: 1.8; }}
+            .info span {{ color: #9e9e9e; }}
+            a {{ color: #7c83ff; text-decoration: none; }}
+            a:hover {{ text-decoration: underline; }}
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>🚀 {PROJECT}</h1>
+            <div class="badge">● Running</div>
+            <div class="info">
+                <p><span>Hostname:</span> {socket.gethostname()}</p>
+                <p><span>FSS Mount:</span> {MOUNT_POINT}</p>
+                <p><span>Server Time:</span> {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S UTC')}</p>
+                <p><span>Port:</span> {PORT}</p>
+            </div>
+            <p style="margin-top:1.5rem;">
+                <a href="/health">/health</a> ·
+                <a href="/api/info">/api/info</a>
+            </p>
+        </div>
+    </body>
+    </html>"""
+
+    if __name__ == "__main__":
+        server = http.server.HTTPServer(("0.0.0.0", PORT), AppHandler)
+        print(f"Serving {PROJECT} on port {PORT} ...")
+        server.serve_forever()
+    APPEOF
+
+  # ── Create systemd service ──
+  - |
+    cat > /etc/systemd/system/${project_name}-app.service << 'SVCEOF'
+    [Unit]
+    Description=${project_name} Python Web Application
+    After=network-online.target remote-fs.target
+    Wants=network-online.target
+
+    [Service]
+    Type=simple
+    ExecStart=/usr/bin/python3 ${mount_point}/www/app.py
+    Restart=always
+    RestartSec=5
+    StandardOutput=journal
+    StandardError=journal
+
+    [Install]
+    WantedBy=multi-user.target
+    SVCEOF
+
+  # ── Enable and start the app ──
+  - systemctl daemon-reload
+  - systemctl enable ${project_name}-app.service
+  - systemctl start ${project_name}-app.service
+
+  # ── Open firewall port ──
+  - firewall-offline-cmd --add-port=${app_port}/tcp || true
+  - systemctl restart firewalld || true
