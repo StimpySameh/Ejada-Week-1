@@ -1,0 +1,40 @@
+# ──────────────────────────────────────────────
+# .gitignore — Week 3
+# ──────────────────────────────────────────────
+
+# Terraform working directories & providers
+.terraform/
+.terraform.lock.hcl
+
+# Terraform state (contains sensitive resource IDs)
+*.tfstate
+*.tfstate.backup
+*.tfstate.*.backup
+
+# Variable files with real secrets (API keys, OCIDs, fingerprints)
+terraform.tfvars
+
+# Crash logs
+crash.log
+crash.*.log
+
+# Override files
+override.tf
+override.tf.json
+*_override.tf
+*_override.tf.json
+
+# Plan output files
+*.tfplan
+
+# Generated manifests (recreated by terraform apply)
+manifests/
+
+# Generated documentation artifacts (HTML/PDF kept locally, not in repo)
+*.pdf
+*.html
+pdf_text.txt
+
+# Helper scripts (one-off utilities)
+generate_*.py
+clean_*.py
